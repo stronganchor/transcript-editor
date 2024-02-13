@@ -2,7 +2,7 @@
 /*
 Plugin Name: * Transcript Editor
 Description: A simple plugin to process and display transcripts for publishing online.
-Version: 1.2
+Version: 1.3
 Author: Strong Anchor Tech
 */
 
@@ -147,54 +147,53 @@ function custom_chatgpt_shortcode() {
 add_shortcode('custom_chatgpt', 'custom_chatgpt_shortcode');
 
 function add_paragraph_breaks_to_text($text) {
-    // Check if the text exceeds 512,000 characters
     if (mb_strlen($text) > 512000) {
         return 'Error: Text exceeds the maximum allowed length of 512,000 characters.';
     }
 
+    $sentences = preg_split('/(?<=[.!?])\s+/', $text, -1, PREG_SPLIT_NO_EMPTY);
+
+    // Base condition for recursion
+    if (count($sentences) <= 4) {
+        return '<p>' . implode(' ', $sentences) . '</p>';
+    }
+
+    $prompt = "Analyze the text provided and determine the logical divisions for the first four paragraphs based on the content's thematic changes and transitions. Please provide the output strictly as a set of comma-separated numbers representing the number of sentences in each subsequent paragraph. Do not include any additional explanations or text in the response. For example, if you identify that the text logically divides into paragraphs with 3, 2, 6, and 4 sentences respectively, please respond with: '3,2,6,4'.\n\nHere is the text:\n\n" . $text;
+    
+    $model = 'gpt-4-turbo-preview';
+    $response = chatgpt_send_message($prompt, $model);
+    
+    // Use regex to find a sequence of comma-separated numbers
+    preg_match('/\d+(?:,\s*\d+)*/', $response, $matches);
+    
+    if (empty($matches)) {
+        return '<strong>Error: Received unexpected response format from the API: </strong>' . $response . ' <strong>Here is the original text:</strong> ' . $text . '</strong> ';
+    }
+    
+    $csv = $matches[0];
+    $paragraph_lengths = array_map('trim', explode(',', $csv));
     $processed_text = '';
-    $remaining_text = $text;
+    $current_sentence_index = 0;
+    
+    foreach ($paragraph_lengths as $length) {
+        $length = (int) $length; // Ensure $length is an integer
 
-    // Loop until all paragraphs are processed
-    while (!empty($remaining_text)) {
-		$sentences = preg_split('/(?<=[.!?])\s+/', $remaining_text, -1, PREG_SPLIT_NO_EMPTY);
-        
-        // If the remaining text is 4 sentences or fewer, treat it as the final paragraph
-        if (count($sentences) <= 4) {
-            $processed_text .= '<p>' . implode(' ', $sentences) . '</p>';
-            break;
-        }
-		
-        $prompt = "Analyze the text provided and determine the logical divisions for the first four paragraphs based on the content's thematic changes and transitions. Please provide the output strictly as a set of comma-separated numbers representing the number of sentences in each subsequent paragraph. Do not include any additional explanations or text in the response. For example, if you identify that the text logically divides into paragraphs with 3, 2, 6 and 4 sentences respectively, please respond with: '3,2,6,4'.\n\nHere is the text:\n\n" . $remaining_text;
-
-        $model = 'gpt-4-turbo-preview'; // Assuming this is the correct identifier for GPT-4 Turbo
-        $response = chatgpt_send_message($prompt, $model);
-
-        // Use regex to find a sequence of comma-separated numbers
-        preg_match('/\d+(?:,\s*\d+)*/', $response, $matches);
-
-        if (empty($matches)) {
-            // If no match is found, break the loop to avoid infinite looping
-            $processed_text .= '<strong>Error: Received unexpected response format from the API: ' . $response . '</strong>';
-            break;
-        }
-
-        $csv = $matches[0];
-        $paragraph_lengths = array_map('trim', explode(',', $csv));
-        $current_sentence_index = 0;
-
-        foreach ($paragraph_lengths as $length) {
-            $length = (int) $length; // Ensure $length is an integer
-            if ($current_sentence_index + $length > count($sentences)) {
-                break; // Prevent exceeding the array bounds
-            }
+        if ($length > 7) {
+            // Recursively process chunks with more than 7 sentences
+            $chunk = implode(' ', array_slice($sentences, $current_sentence_index, $length));
+            $processed_text .= add_paragraph_breaks_to_text($chunk);
+        } else {
             $paragraph = array_slice($sentences, $current_sentence_index, $length);
             $processed_text .= '<p>' . implode(' ', $paragraph) . '</p>';
-            $current_sentence_index += $length;
         }
-
-        // Update remaining_text for the next iteration
-        $remaining_text = implode(' ', array_slice($sentences, $current_sentence_index));
+        $current_sentence_index += $length;
+    }
+    
+    // Process any remaining text recursively
+    $remaining_sentences = array_slice($sentences, $current_sentence_index);
+    $remaining_text = implode(' ', $remaining_sentences);
+    if (!empty($remaining_text)) {
+        $processed_text .= add_paragraph_breaks_to_text($remaining_text);
     }
 
     return $processed_text;
