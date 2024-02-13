@@ -2,7 +2,7 @@
 /*
 Plugin Name: * Transcript Editor
 Description: A simple plugin to process and display transcripts for publishing online.
-Version: 1.3
+Version: 1.4
 Author: Strong Anchor Tech
 */
 
@@ -147,53 +147,42 @@ function custom_chatgpt_shortcode() {
 add_shortcode('custom_chatgpt', 'custom_chatgpt_shortcode');
 
 function add_paragraph_breaks_to_text($text) {
-    if (mb_strlen($text) > 512000) {
-        return 'Error: Text exceeds the maximum allowed length of 512,000 characters.';
-    }
-
-    $sentences = preg_split('/(?<=[.!?])\s+/', $text, -1, PREG_SPLIT_NO_EMPTY);
-
-    // Base condition for recursion
-    if (count($sentences) <= 4) {
-        return '<p>' . implode(' ', $sentences) . '</p>';
-    }
-
-    $prompt = "Analyze the text provided and determine the logical divisions for the first four paragraphs based on the content's thematic changes and transitions. Please provide the output strictly as a set of comma-separated numbers representing the number of sentences in each subsequent paragraph. Do not include any additional explanations or text in the response. For example, if you identify that the text logically divides into paragraphs with 3, 2, 6, and 4 sentences respectively, please respond with: '3,2,6,4'.\n\nHere is the text:\n\n" . $text;
-    
-    $model = 'gpt-4-turbo-preview';
-    $response = chatgpt_send_message($prompt, $model);
-    
-    // Use regex to find a sequence of comma-separated numbers
-    preg_match('/\d+(?:,\s*\d+)*/', $response, $matches);
-    
-    if (empty($matches)) {
-        return '<strong>Error: Received unexpected response format from the API: </strong>' . $response . ' <strong>Here is the original text:</strong> ' . $text . '</strong> ';
-    }
-    
-    $csv = $matches[0];
-    $paragraph_lengths = array_map('trim', explode(',', $csv));
     $processed_text = '';
-    $current_sentence_index = 0;
-    
-    foreach ($paragraph_lengths as $length) {
-        $length = (int) $length; // Ensure $length is an integer
+    $remainingText = $text;
+    $error_messages = ''; // Initialize variable to accumulate error messages
 
-        if ($length > 7) {
-            // Recursively process chunks with more than 7 sentences
-            $chunk = implode(' ', array_slice($sentences, $current_sentence_index, $length));
-            $processed_text .= add_paragraph_breaks_to_text($chunk);
+    while (!empty($remainingText)) {
+        // Extract the first 200 words for analysis
+        $first200WordsArray = array_slice(explode(' ', $remainingText), 0, 200);
+        $first200Words = implode(' ', $first200WordsArray);
+
+        $prompt = "Given the following text, identify the number of sentences that should form the first paragraph. Provide a single number between 1 and 5 as your response, with no other commentary.\n\n" . $first200Words;
+        
+        $model = 'gpt-3.5-turbo'; // Using gpt-3.5-turbo model
+        $response = chatgpt_send_message($prompt, $model);
+
+        // Attempt to extract a single number from the response
+        preg_match('/\b[1-5]\b/', $response, $matches);
+        if (empty($matches)) {
+            // If no valid number is found, log the error and proceed without breaking
+            $error_messages .= '<strong>Error: Received unexpected response format from the API: </strong>' . htmlspecialchars($response) . ' <strong>For text: </strong>' . htmlspecialchars($first200Words) . '<br />';
+            // Default to a conservative number of sentences if no valid response is received
+            $length = 2;
         } else {
-            $paragraph = array_slice($sentences, $current_sentence_index, $length);
-            $processed_text .= '<p>' . implode(' ', $paragraph) . '</p>';
+            $length = (int) $matches[0]; // Use the extracted number
         }
-        $current_sentence_index += $length;
+
+        $sentences = preg_split('/(?<=[.!?])\s+/', $remainingText, -1, PREG_SPLIT_NO_EMPTY);
+        $paragraph = array_slice($sentences, 0, $length);
+        $processed_text .= '<p>' . implode(' ', $paragraph) . '</p>';
+
+        // Update remainingText for the next iteration
+        $remainingText = implode(' ', array_slice($sentences, $length));
     }
-    
-    // Process any remaining text recursively
-    $remaining_sentences = array_slice($sentences, $current_sentence_index);
-    $remaining_text = implode(' ', $remaining_sentences);
-    if (!empty($remaining_text)) {
-        $processed_text .= add_paragraph_breaks_to_text($remaining_text);
+
+    // Append any error messages to the bottom of the processed text
+    if (!empty($error_messages)) {
+        $processed_text .= "<div class='error-messages'>$error_messages</div>";
     }
 
     return $processed_text;
