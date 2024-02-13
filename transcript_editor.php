@@ -2,7 +2,7 @@
 /*
 Plugin Name: * Transcript Editor
 Description: A simple plugin to process and display transcripts for publishing online.
-Version: 1.1
+Version: 1.2
 Author: Strong Anchor Tech
 */
 
@@ -146,3 +146,90 @@ function custom_chatgpt_shortcode() {
 }
 add_shortcode('custom_chatgpt', 'custom_chatgpt_shortcode');
 
+function add_paragraph_breaks_to_text($text) {
+    // Check if the text exceeds 512,000 characters
+    if (mb_strlen($text) > 512000) {
+        return 'Error: Text exceeds the maximum allowed length of 512,000 characters.';
+    }
+
+    $processed_text = '';
+    $remaining_text = $text;
+
+    // Loop until all paragraphs are processed
+    while (!empty($remaining_text)) {
+		$sentences = preg_split('/(?<=[.!?])\s+/', $remaining_text, -1, PREG_SPLIT_NO_EMPTY);
+        
+        // If the remaining text is 4 sentences or fewer, treat it as the final paragraph
+        if (count($sentences) <= 4) {
+            $processed_text .= '<p>' . implode(' ', $sentences) . '</p>';
+            break;
+        }
+		
+        $prompt = "Analyze the text provided and determine the logical divisions for the first four paragraphs based on the content's thematic changes and transitions. Please provide the output strictly as a set of comma-separated numbers representing the number of sentences in each subsequent paragraph. Do not include any additional explanations or text in the response. For example, if you identify that the text logically divides into paragraphs with 3, 2, 6 and 4 sentences respectively, please respond with: '3,2,6,4'.\n\nHere is the text:\n\n" . $remaining_text;
+
+        $model = 'gpt-4-turbo-preview'; // Assuming this is the correct identifier for GPT-4 Turbo
+        $response = chatgpt_send_message($prompt, $model);
+
+        // Use regex to find a sequence of comma-separated numbers
+        preg_match('/\d+(?:,\s*\d+)*/', $response, $matches);
+
+        if (empty($matches)) {
+            // If no match is found, break the loop to avoid infinite looping
+            $processed_text .= '<strong>Error: Received unexpected response format from the API: ' . $response . '</strong>';
+            break;
+        }
+
+        $csv = $matches[0];
+        $paragraph_lengths = array_map('trim', explode(',', $csv));
+        $current_sentence_index = 0;
+
+        foreach ($paragraph_lengths as $length) {
+            $length = (int) $length; // Ensure $length is an integer
+            if ($current_sentence_index + $length > count($sentences)) {
+                break; // Prevent exceeding the array bounds
+            }
+            $paragraph = array_slice($sentences, $current_sentence_index, $length);
+            $processed_text .= '<p>' . implode(' ', $paragraph) . '</p>';
+            $current_sentence_index += $length;
+        }
+
+        // Update remaining_text for the next iteration
+        $remaining_text = implode(' ', array_slice($sentences, $current_sentence_index));
+    }
+
+    return $processed_text;
+}
+
+// [gpt_paragraph_breaks] Shortcode - ask for user input and display it with paragraph breaks
+function gpt_paragraph_breaks_shortcode() {
+    // Start output buffering to capture form and output
+    ob_start();
+
+    // Check if the form has been submitted
+    if (isset($_POST['gpt_paragraph_breaks_submit'])) {
+        $text = isset($_POST['gpt_paragraph_breaks_text']) ? stripslashes($_POST['gpt_paragraph_breaks_text']) : '';
+        
+        // Sanitize the text input
+        $text = sanitize_textarea_field($text);
+
+        // Process the text to add paragraph breaks
+        $processed_text = add_paragraph_breaks_to_text($text);
+
+        // Display the processed text
+        echo '<div id="gpt_paragraph_breaks_result">' . $processed_text . '</div>';
+    }
+
+    // Display the form for text input
+    ?>
+    <form method="post" action="">
+        <textarea name="gpt_paragraph_breaks_text" rows="10" cols="50" placeholder="Enter your text here"></textarea><br>
+        <input type="submit" name="gpt_paragraph_breaks_submit" value="Add Paragraph Breaks">
+    </form>
+    <?php
+
+    // Return the output buffer content
+    return ob_get_clean();
+}
+
+// Register the shortcode with WordPress
+add_shortcode('gpt_paragraph_breaks', 'gpt_paragraph_breaks_shortcode');
